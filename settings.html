@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Settings – Delhi Bhandara Finder</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="storage.js"></script>
+</head>
+<body class="bg-gray-50 min-h-screen flex flex-col">
+  <header class="sticky top-0 w-full bg-white shadow z-10 flex items-center justify-between px-4 py-3">
+    <h1 class="text-lg font-bold">Settings</h1>
+    <a href="index.html" class="text-sm px-3 py-1 rounded bg-indigo-50 text-indigo-700 hover:bg-indigo-100 border border-indigo-100 transition">
+      Home
+    </a>
+  </header>
+  <main class="flex-1 max-w-xl mx-auto w-full p-4">
+    <section class="mb-8">
+      <h2 class="text-base font-semibold mb-2">Notifications</h2>
+      <div class="flex items-center justify-between bg-white px-4 py-3 rounded-lg shadow mb-3">
+        <span class="font-medium text-gray-800">Nearby Bhandara Alerts</span>
+        <label class="inline-flex items-center cursor-pointer">
+          <input type="checkbox" id="notif-toggle" class="sr-only peer">
+          <div class="w-11 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:bg-green-500 transition"></div>
+          <div class="absolute left-1 top-1 bg-white w-4 h-4 rounded-full shadow transform peer-checked:translate-x-5 transition"></div>
+        </label>
+      </div>
+      <div id="notif-status" class="text-sm mt-2 text-gray-600"></div>
+    </section>
+  </main>
+  <script>
+    // --- Notification and Geolocation Logic ---
+
+    // Haversine formula for distance (in km)
+    function distanceKm(lat1, lon1, lat2, lon2) {
+      const R = 6371;
+      const dLat = (lat2 - lat1) * Math.PI / 180;
+      const dLon = (lon2 - lon1) * Math.PI / 180;
+      const a = Math.sin(dLat/2) * Math.sin(dLat/2) +
+                Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+                Math.sin(dLon/2) * Math.sin(dLon/2);
+      const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+      return R * c;
+    }
+
+    // Get all bhandaras (from static + user)
+    function getAllBhandaras() {
+      const defaultBhandaras = [
+        { id: "static_1", title: "Hanuman Mandir Bhandara", time: "2025-06-05T10:00", lat: 28.6328, lng: 77.2197 },
+        { id: "static_2", title: "ISKCON Temple Bhandara", time: "2025-06-05T12:00", lat: 28.5672, lng: 77.2507 },
+        { id: "static_3", title: "Lajpat Nagar Bhandara", time: "2025-06-05T09:00", lat: 28.5734, lng: 77.2430 },
+        { id: "static_4", title: "Qutub Minar Bhandara", time: "2025-06-06T11:00", lat: 28.5245, lng: 77.1855 },
+        { id: "static_5", title: "Karol Bagh Bhandara", time: "2025-06-07T10:30", lat: 28.6448, lng: 77.2167 },
+        { id: "static_6", title: "Lotus Temple Bhandara", time: "2025-06-08T13:00", lat: 28.5510, lng: 77.2577 },
+        { id: "static_7", title: "Anand Vihar Bhandara", time: "2025-06-09T11:30", lat: 28.6367, lng: 77.2796 },
+        { id: "static_8", title: "Old Delhi Railway Bhandara", time: "2025-06-10T10:00", lat: 28.6505, lng: 77.2334 },
+        { id: "static_9", title: "Saket Bhandara", time: "2025-06-10T14:00", lat: 28.5670, lng: 77.2100 },
+        { id: "static_10", title: "Ghaziabad Border Bhandara", time: "2025-06-11T10:30", lat: 28.6692, lng: 77.4538 }
+      ];
+      let userBhandaras = [];
+      try {
+        userBhandaras = (window.BhandaraStorage?.getAllBhandaras() || []).map(b => ({
+          id: b.id,
+          title: b.title,
+          time: b.time,
+          lat: b.lat,
+          lng: b.lng
+        }));
+      } catch {}
+      return [...userBhandaras, ...defaultBhandaras];
+    }
+
+    // --- Notification Toggle UI ---
+    const notifToggle = document.getElementById('notif-toggle');
+    const notifStatus = document.getElementById('notif-status');
+    const NOTIF_KEY = 'bhandara_notify_enabled';
+
+    // Initialize toggle from localStorage
+    notifToggle.checked = localStorage.getItem(NOTIF_KEY) === '1';
+
+    function updateStatus(msg, color) {
+      notifStatus.textContent = msg;
+      notifStatus.className = "text-sm mt-2 " + (color || "text-gray-600");
+    }
+
+    function requestNotificationPermission(thenCallback) {
+      if (!('Notification' in window)) {
+        updateStatus("Browser does not support notifications.", "text-red-600");
+        return;
+      }
+      Notification.requestPermission().then(permission => {
+        if (permission === "granted") {
+          updateStatus("Notifications enabled. You will be alerted for nearby Bhandaras.", "text-green-700");
+          if (thenCallback) thenCallback();
+        } else if (permission === "denied") {
+          notifToggle.checked = false;
+          localStorage.setItem(NOTIF_KEY, '0');
+          updateStatus("Notifications denied in browser settings.", "text-red-600");
+        } else {
+          notifToggle.checked = false;
+          localStorage.setItem(NOTIF_KEY, '0');
+          updateStatus("Notifications not enabled.", "text-gray-600");
+        }
+      });
+    }
+
+    notifToggle.addEventListener('change', function() {
+      if (this.checked) {
+        // Ask for Notification permission
+        requestNotificationPermission(() => {
+          localStorage.setItem(NOTIF_KEY, '1');
+          // Try geolocation permission
+          if ("geolocation" in navigator) {
+            navigator.geolocation.getCurrentPosition(
+              () => updateStatus("Notifications enabled. You will be alerted for nearby Bhandaras.", "text-green-700"),
+              () => updateStatus("Enable location sharing to get nearby alerts.", "text-red-600")
+            );
+          } else {
+            updateStatus("Geolocation not supported in your browser.", "text-red-600");
+          }
+        });
+      } else {
+        localStorage.setItem(NOTIF_KEY, '0');
+        updateStatus("Notifications disabled.", "text-gray-600");
+      }
+    });
+
+    // Startup display
+    if (notifToggle.checked) {
+      if ('Notification' in window && Notification.permission === "granted") {
+        updateStatus("Notifications enabled. You will be alerted for nearby Bhandaras.", "text-green-700");
+      } else {
+        updateStatus("Enable notifications and location for alerts.", "text-gray-600");
+      }
+    } else {
+      updateStatus("Notifications are off.", "text-gray-600");
+    }
+
+    // --- Notification Check Logic ---
+    let notifCheckInterval = null;
+    let notifiedIdSet = new Set(JSON.parse(localStorage.getItem('bhandara_notified_ids') || '[]'));
+
+    function saveNotifiedIds() {
+      localStorage.setItem('bhandara_notified_ids', JSON.stringify(Array.from(notifiedIdSet)));
+    }
+
+    function checkNearbyBhandarasAndNotify() {
+      if (localStorage.getItem(NOTIF_KEY) !== '1') return;
+      if (!('Notification' in window) || Notification.permission !== "granted") return;
+      if (!("geolocation" in navigator)) {
+        updateStatus("Geolocation not supported in your browser.", "text-red-600");
+        return;
+      }
+      navigator.geolocation.getCurrentPosition(function(pos) {
+        const {latitude, longitude} = pos.coords;
+        const all = getAllBhandaras();
+        const now = new Date();
+        const soon = new Date(now.getTime() + 2 * 60 * 60 * 1000); // 2 hours from now
+        all.forEach(b => {
+          if (!b.lat || !b.lng || !b.time) return;
+          const d = distanceKm(latitude, longitude, b.lat, b.lng);
+          const bhTime = new Date(b.time);
+          if (d <= 2 && bhTime >= now && bhTime <= soon && !notifiedIdSet.has(b.id)) {
+            const timeStr = bhTime.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' });
+            new Notification("Free Bhandara nearby at " + b.title, {
+              body: `Starts at ${timeStr}`,
+              icon: "https://img.icons8.com/doodle/48/food-sharing.png"
+            });
+            notifiedIdSet.add(b.id);
+            saveNotifiedIds();
+          }
+        });
+      }, function() {
+        updateStatus("Enable location sharing to get nearby alerts.", "text-red-600");
+      }, { enableHighAccuracy: false, timeout: 6000 });
+    }
+
+    // Set up 10 min interval polling if enabled
+    function setupInterval() {
+      if (notifCheckInterval) clearInterval(notifCheckInterval);
+      if (localStorage.getItem(NOTIF_KEY) === '1') {
+        checkNearbyBhandarasAndNotify();
+        notifCheckInterval = setInterval(checkNearbyBhandarasAndNotify, 1000 * 60 * 10); // every 10min
+      }
+    }
+    setupInterval();
+    notifToggle.addEventListener('change', setupInterval);
+
+    // Also run on focus to catch new events
+    window.addEventListener('focus', setupInterval);
+  </script>
+</body>
+</html>

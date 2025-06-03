@@ -1,0 +1,421 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Delhi Bhandara Finder</title>
+  <!-- PWA: Manifest, Theme & Icons -->
+  <link rel="manifest" href="/manifest.json">
+  <meta name="theme-color" content="#4f46e5" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+  <link rel="apple-touch-icon" href="/icons/icon-192.png">
+  <link rel="apple-touch-icon" sizes="512x512" href="/icons/icon-512.png">
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Leaflet CSS -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css"/>
+  <style>
+    #map { min-height: 14rem; height: 14rem;}
+    @media (min-width: 640px) { #map { height: 18rem; } }
+  </style>
+</head>
+<body class="bg-gray-50 text-gray-900 min-h-screen flex flex-col">
+  <header class="sticky top-0 w-full bg-white shadow z-10 flex items-center justify-between px-4 py-3">
+    <h1 id="app-title" class="text-lg font-bold">Delhi Bhandara Finder</h1>
+    <div class="flex gap-2 items-center flex-wrap">
+      <button id="install-btn"
+        class="hidden text-sm px-3 py-1 rounded bg-yellow-400 text-white hover:bg-yellow-500 transition">
+        Install App
+      </button>
+      <a href="volunteer.html" class="text-sm px-3 py-1 rounded bg-green-50 text-green-700 hover:bg-green-100 border border-green-100 transition">Volunteer / Donate</a>
+      <a href="settings.html" class="text-sm px-3 py-1 rounded bg-yellow-50 text-yellow-700 hover:bg-yellow-100 border border-yellow-100 transition">Settings</a>
+      <button id="lang-toggle" class="text-sm px-3 py-1 rounded bg-gray-200 hover:bg-gray-300 transition min-w-[70px]">
+        हिंदी
+      </button>
+      <a id="admin-link" href="admin.html"
+        class="text-sm px-3 py-1 rounded bg-indigo-50 text-indigo-700 hover:bg-indigo-100 border border-indigo-100 transition hidden">
+        Admin Panel
+      </a>
+      <a id="login-link" href="login.html"
+        class="text-sm px-3 py-1 rounded bg-indigo-600 text-white hover:bg-indigo-700 transition">
+        Organizer Login
+      </a>
+    </div>
+  </header>
+  <main class="flex-1 flex flex-col">
+    <div class="w-full">
+      <div id="map" class="w-full rounded-b-lg"></div>
+    </div>
+    <section class="flex-1 overflow-y-auto bg-white rounded-t-2xl mt-[-1rem] pt-4 shadow-inner">
+      <div class="flex items-center justify-between px-4">
+        <h2 id="upcoming-title" class="text-base font-semibold mb-2">Upcoming Bhandaras</h2>
+        <a href="submit-bhandara.html" id="submit-btn"
+          class="text-xs bg-indigo-600 text-white px-3 py-1 rounded hover:bg-indigo-700 transition mb-2 whitespace-nowrap">Submit Bhandara</a>
+      </div>
+      <ul id="bhandara-list" class="flex flex-col gap-3 px-4 pb-4"></ul>
+    </section>
+  </main>
+  <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+  <script src="storage.js"></script>
+  <script>
+  document.addEventListener("DOMContentLoaded", function() {
+    // --- PWA: Service Worker Registration & Install Prompt ---
+    if ("serviceWorker" in navigator) {
+      navigator.serviceWorker.register("/service-worker.js")
+        .catch(err => console.log("SW registration failed:", err));
+    }
+
+    // Install Prompt
+    let deferredPrompt;
+    const installBtn = document.getElementById("install-btn");
+    window.addEventListener("beforeinstallprompt", (e) => {
+      e.preventDefault();
+      deferredPrompt = e;
+      installBtn.classList.remove("hidden");
+    });
+    installBtn?.addEventListener("click", async () => {
+      installBtn.classList.add("hidden");
+      if (deferredPrompt) {
+        deferredPrompt.prompt();
+        await deferredPrompt.userChoice;
+        deferredPrompt = null;
+      }
+    });
+    window.addEventListener("appinstalled", () => {
+      installBtn.classList.add("hidden");
+    });
+
+    // --- i18n translations ---
+    const translations = {
+      en: {
+        title: "Delhi Bhandara Finder",
+        submit: "Submit Bhandara",
+        upcoming: "Upcoming Bhandaras",
+        hindi: "हिंदी",
+        english: "English",
+        viewDetails: "View Details",
+        distance: "N/A",
+        organizer: "Organizer",
+        dateTime: "Date & Time",
+        address: "Address",
+        foodMenu: "Food Menu",
+        back: "Back",
+        share: "Share",
+        login: "Organizer Login",
+        admin: "Admin Panel",
+        volunteer: "Volunteer / Donate",
+        settings: "Settings"
+      },
+      hi: {
+        title: "दिल्ली भंडारा खोजक",
+        submit: "भंडारा सबमिट करें",
+        upcoming: "आगामी भंडारे",
+        hindi: "English",
+        english: "हिंदी",
+        viewDetails: "विवरण देखें",
+        distance: "दूरी",
+        organizer: "आयोजक",
+        dateTime: "तिथि और समय",
+        address: "पता",
+        foodMenu: "भोजन मेनू",
+        back: "वापस जाएं",
+        share: "साझा करें",
+        login: "ऑर्गनाइज़र लॉगिन",
+        admin: "एडमिन पैनल",
+        volunteer: "स्वयंसेवक / दान करें",
+        settings: "सेटिंग्स"
+      }
+    };
+
+    // --- Language state ---
+    function getSavedLang() {
+      return localStorage.getItem('lang') || 'en';
+    }
+    function setLang(lang) {
+      localStorage.setItem('lang', lang);
+    }
+    let currentLang = getSavedLang();
+
+    function applyTranslations() {
+      document.getElementById("app-title").textContent = translations[currentLang].title;
+      document.getElementById("upcoming-title").textContent = translations[currentLang].upcoming;
+      document.getElementById("submit-btn").textContent = translations[currentLang].submit;
+      document.getElementById("lang-toggle").textContent = currentLang === "en"
+        ? translations.en.hindi
+        : translations.hi.hindi;
+      document.getElementById("login-link").textContent = translations[currentLang].login;
+      document.getElementById("admin-link").textContent = translations[currentLang].admin;
+      document.querySelector('a[href="volunteer.html"]').textContent = translations[currentLang].volunteer;
+      document.querySelector('a[href="settings.html"]').textContent = translations[currentLang].settings;
+    }
+    document.getElementById("lang-toggle").addEventListener("click", () => {
+      currentLang = currentLang === "en" ? "hi" : "en";
+      setLang(currentLang);
+      applyTranslations();
+      renderBhandaraList();
+      renderMarkers();
+    });
+
+    // Organizer/Admin nav logic
+    function updateAdminNav() {
+      const isLoggedIn = localStorage.getItem('organizer_logged_in') === '1';
+      document.getElementById('admin-link').classList.toggle('hidden', !isLoggedIn);
+      document.getElementById('login-link').classList.toggle('hidden', isLoggedIn);
+      document.getElementById('submit-btn').classList.toggle('hidden', !isLoggedIn);
+    }
+    updateAdminNav();
+    window.addEventListener('focus', updateAdminNav);
+
+    // --- Bhandara Data ---
+    const defaultBhandaras = [
+      {
+        id: "static_1",
+        name: {en: "Hanuman Mandir Bhandara", hi: "हनुमान मंदिर भंडारा"},
+        time: "2025-06-05T10:00",
+        food: {en: "Chole Bhature, Halwa", hi: "छोले भटूरे, हलवा"},
+        distance: "2.3 km",
+        lat: 28.6328, lng: 77.2197,
+        address: "Hanuman Mandir, Connaught Place, New Delhi",
+        organizer: "Shri Ram Seva Samiti",
+        menu: "Chole Bhature\nHalwa",
+        image: ""
+      },
+      {
+        id: "static_2",
+        name: {en: "ISKCON Temple Bhandara", hi: "इस्कॉन मंदिर भंडारा"},
+        time: "2025-06-05T12:00",
+        food: {en: "Khichdi, Fruit", hi: "खिचड़ी, फल"},
+        distance: "5.1 km",
+        lat: 28.5672, lng: 77.2507,
+        address: "ISKCON Temple, East of Kailash, New Delhi",
+        organizer: "ISKCON Volunteers",
+        menu: "Khichdi\nFruit",
+        image: ""
+      },
+      {
+        id: "static_3",
+        name: {en: "Lajpat Nagar Bhandara", hi: "लाजपत नगर भंडारा"},
+        time: "2025-06-05T09:00",
+        food: {en: "Puri Sabzi, Jalebi", hi: "पूरी सब्ज़ी, जलेबी"},
+        distance: "3.7 km",
+        lat: 28.5734, lng: 77.2430,
+        address: "Lajpat Nagar, New Delhi",
+        organizer: "Lajpat Nagar Mandal",
+        menu: "Puri Sabzi\nJalebi",
+        image: ""
+      },
+      {
+        id: "static_4",
+        name: {en: "Qutub Minar Bhandara", hi: "कुतुब मीनार भंडारा"},
+        time: "2025-06-06T11:00",
+        food: {en: "Rajma Chawal, Lassi", hi: "राजमा चावल, लस्सी"},
+        distance: "6.2 km",
+        lat: 28.5245, lng: 77.1855,
+        address: "Qutub Minar, Mehrauli, New Delhi",
+        organizer: "Mehrauli Sewa Samiti",
+        menu: "Rajma Chawal\nLassi",
+        image: ""
+      },
+      {
+        id: "static_5",
+        name: {en: "Karol Bagh Bhandara", hi: "करोल बाग भंडारा"},
+        time: "2025-06-07T10:30",
+        food: {en: "Poori Sabzi, Kheer", hi: "पूरी सब्जी, खीर"},
+        distance: "4.8 km",
+        lat: 28.6448, lng: 77.2167,
+        address: "Karol Bagh, New Delhi",
+        organizer: "Karol Bagh Welfare",
+        menu: "Poori Sabzi\nKheer",
+        image: ""
+      },
+      {
+        id: "static_6",
+        name: {en: "Lotus Temple Bhandara", hi: "लोटस टेम्पल भंडारा"},
+        time: "2025-06-08T13:00",
+        food: {en: "Daal Roti, Salad", hi: "दाल रोटी, सलाद"},
+        distance: "7.1 km",
+        lat: 28.5510, lng: 77.2577,
+        address: "Lotus Temple, Kalkaji, New Delhi",
+        organizer: "Lotus Temple Trust",
+        menu: "Daal Roti\nSalad",
+        image: ""
+      },
+      {
+        id: "static_7",
+        name: {en: "Anand Vihar Bhandara", hi: "आनंद विहार भंडारा"},
+        time: "2025-06-09T11:30",
+        food: {en: "Idli Sambar, Coconut Chutney", hi: "इडली सांभर, नारियल चटनी"},
+        distance: "8.3 km",
+        lat: 28.6367, lng: 77.2796,
+        address: "Anand Vihar, New Delhi",
+        organizer: "Anand Vihar Sewa Group",
+        menu: "Idli Sambar\nCoconut Chutney",
+        image: ""
+      },
+      {
+        id: "static_8",
+        name: {en: "Old Delhi Railway Bhandara", hi: "पुरानी दिल्ली रेलवे भंडारा"},
+        time: "2025-06-10T10:00",
+        food: {en: "Aloo Puri, Jalebi", hi: "आलू पूरी, जलेबी"},
+        distance: "9.1 km",
+        lat: 28.6505, lng: 77.2334,
+        address: "Old Delhi Railway Station, New Delhi",
+        organizer: "Railway Sewa Mandal",
+        menu: "Aloo Puri\nJalebi",
+        image: ""
+      },
+      {
+        id: "static_9",
+        name: {en: "Saket Bhandara", hi: "साकेत भंडारा"},
+        time: "2025-06-10T14:00",
+        food: {en: "Chawal Kadhi, Rasgulla", hi: "चावल कढ़ी, रसगुल्ला"},
+        distance: "6.6 km",
+        lat: 28.5670, lng: 77.2100,
+        address: "Saket, New Delhi",
+        organizer: "Saket Residents Assoc.",
+        menu: "Chawal Kadhi\nRasgulla",
+        image: ""
+      },
+      {
+        id: "static_10",
+        name: {en: "Ghaziabad Border Bhandara", hi: "गाजियाबाद बॉर्डर भंडारा"},
+        time: "2025-06-11T10:30",
+        food: {en: "Paneer Tikka, Roti", hi: "पनीर टिक्का, रोटी"},
+        distance: "12.2 km",
+        lat: 28.6692, lng: 77.4538,
+        address: "Ghaziabad Border, Delhi Side",
+        organizer: "Border Sewa",
+        menu: "Paneer Tikka\nRoti",
+        image: ""
+      }
+    ];
+
+    function formatTime(dt) {
+      if (!dt) return "";
+      const d = new Date(dt);
+      return d.toLocaleString(currentLang === "en" ? 'en-IN' : 'hi-IN', {
+        dateStyle: "medium",
+        timeStyle: "short"
+      });
+    }
+
+    function getAllBhandaras() {
+      const userBhandaras = window.BhandaraStorage ? window.BhandaraStorage.getAllBhandaras() : [];
+      const formattedUser = userBhandaras.map(b => ({
+        ...b,
+        name: { en: b.title, hi: b.title },
+        time: b.time,
+        food: { en: b.menu.replace(/\n/g, ", "), hi: b.menu.replace(/\n/g, ", ") },
+        distance: translations[currentLang].distance,
+        lat: b.lat,
+        lng: b.lng,
+        address: b.address,
+        organizer: b.organizer,
+        menu: b.menu,
+        image: b.image
+      }));
+      return [...formattedUser, ...defaultBhandaras];
+    }
+
+    function renderBhandaraList() {
+      const list = document.getElementById("bhandara-list");
+      list.innerHTML = "";
+      const bhandaras = getAllBhandaras();
+      bhandaras.forEach((b) => {
+        const li = document.createElement("li");
+        li.className =
+          "bg-gray-100 rounded-lg p-3 flex flex-col gap-1 shadow-sm cursor-pointer hover:bg-indigo-50 transition";
+        li.tabIndex = 0;
+        li.onclick = () => viewBhandaraDetail(b.id);
+        li.onkeypress = (e) => { if (e.key === "Enter" || e.key === " ") viewBhandaraDetail(b.id); };
+        li.innerHTML = `
+          <div class="flex justify-between items-center">
+            <span class="font-medium text-base text-indigo-700 hover:underline">
+              ${b.name[currentLang]}
+            </span>
+            <span class="text-xs bg-indigo-100 text-indigo-700 rounded px-2 py-0.5">${b.distance || ''}</span>
+          </div>
+          <div class="flex items-center text-sm text-gray-600 gap-2">
+            <span>🕒 ${formatTime(b.time)}</span>
+            <span>🍽️ ${b.food[currentLang]}</span>
+          </div>
+        `;
+        list.appendChild(li);
+      });
+    }
+
+    function viewBhandaraDetail(id) {
+      const bhandaras = getAllBhandaras();
+      const b = bhandaras.find(x => x.id === id);
+      if (!b) return;
+      if (!id.startsWith("static_")) {
+        window.location.href = "bhandara-detail.html?id=" + encodeURIComponent(b.id) + "&lang=" + currentLang;
+      } else {
+        const params = new URLSearchParams({
+          title: b.name.en,
+          organizer: b.organizer,
+          datetime: b.time,
+          address: b.address,
+          menu: b.menu,
+          lang: currentLang
+        });
+        window.location.href = "bhandara-detail.html?" + params.toString();
+      }
+    }
+    window.viewBhandaraDetail = viewBhandaraDetail;
+
+    // ---- LEAFLET MAP ----
+    const delhiCoords = [28.6139, 77.2090];
+    const map = L.map('map', {
+      zoomControl: false,
+      attributionControl: false,
+    }).setView(delhiCoords, 12);
+
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 18 }).addTo(map);
+
+    let markerGroup = null;
+
+    function renderMarkers() {
+      if (markerGroup) markerGroup.clearLayers();
+      const bhandaras = getAllBhandaras();
+      markerGroup = L.layerGroup();
+      bhandaras.forEach((b) => {
+        if (!b.lat || !b.lng) return;
+        const marker = L.marker([b.lat, b.lng]);
+        const popupContent = `
+          <div class="font-semibold mb-1">${b.name[currentLang]}</div>
+          <div class="text-xs text-gray-700 mb-2">🕒 ${formatTime(b.time)}</div>
+          <button onclick="window.viewBhandaraDetail('${b.id}')"
+            class="bg-indigo-600 text-white text-xs px-3 py-1 rounded hover:bg-indigo-700 w-full">
+            ${translations[currentLang].viewDetails}
+          </button>
+        `;
+        marker.bindPopup(popupContent, { minWidth: 160 });
+        markerGroup.addLayer(marker);
+      });
+      markerGroup.addTo(map);
+    }
+
+    function resizeMap() {
+      setTimeout(() => {
+        map.invalidateSize();
+      }, 300);
+    }
+    window.addEventListener('resize', resizeMap);
+
+    // Initial render
+    applyTranslations();
+    renderBhandaraList();
+    renderMarkers();
+
+    window.addEventListener("DOMContentLoaded", resizeMap);
+    window.addEventListener('focus', () => {
+      renderBhandaraList();
+      renderMarkers();
+      updateAdminNav();
+    });
+  });
+  </script>
+</body>
+</html>
